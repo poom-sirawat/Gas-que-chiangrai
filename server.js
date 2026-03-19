@@ -432,6 +432,185 @@ app.delete('/api/cleanup-duplicates', async (req, res) => {
   }
 });
 
+// =============================================================
+// CSV Import — อัพโหลด CSV/TSV แล้วดึงข้อมูลปั๊ม
+// =============================================================
+app.post('/api/import-csv', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกไฟล์' });
+
+  try {
+    const text = req.file.buffer.toString('utf-8');
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) return res.json({ success: false, message: 'ไฟล์ว่างหรือข้อมูลไม่เพียงพอ' });
+
+    // ตรวจ delimiter (tab หรือ comma)
+    const delim = lines[0].includes('\t') ? '\t' : ',';
+    const header = lines[0].split(delim).map(h => h.trim().toLowerCase());
+
+    // หา column index
+    const colMap = {};
+    header.forEach((h, i) => {
+      if (/อำเภอ|อําเภอ|district/.test(h)) colMap.district = i;
+      if (/ชื่อ|สถานี|station|name/.test(h)) colMap.name = i;
+      if (/น้ำมัน.*มี|มีจำหน่าย|available/.test(h)) colMap.available = i;
+      if (/น้ำมัน.*หมด|ชนิด.*หมด|out/.test(h)) colMap.outOfStock = i;
+      if (/google|map|ลิงก์|link/.test(h)) colMap.mapLink = i;
+      if (/อัปเดท|update|ประทับ|เวลา/.test(h)) colMap.updated = i;
+      if (/กำหนด|เข้า|delivery/.test(h)) colMap.delivery = i;
+    });
+
+    // ถ้าหา column ไม่ได้ ลองใช้ตำแหน่งตามรูปแบบที่เห็น
+    if (!colMap.name && header.length >= 3) {
+      colMap.district = 0;
+      colMap.name = 1;
+      colMap.available = 2;
+      colMap.outOfStock = header.length > 3 ? 3 : undefined;
+      colMap.mapLink = header.length > 4 ? 4 : undefined;
+    }
+
+    const SUPABASE_URL = 'https://tekcyzixbsuankaiuncs.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_7VRgnntgw8VyGVgC8mTLrA_rnaE2vm0';
+
+    const FUEL_MAP = {
+      'g95': 'gasohol_95', '95': 'gasohol_95', 'gasohol 95': 'gasohol_95',
+      'g91': 'gasohol_91', '91': 'gasohol_91', 'gasohol 91': 'gasohol_91',
+      'e20': 'gasohol_e20', 'gasohol e20': 'gasohol_e20',
+      'e85': 'gasohol_e85', 'เบนซิน': 'gasohol_e85', 'benzene': 'gasohol_e85', 'gasohol e85': 'gasohol_e85',
+      'b7': 'diesel_b7', 'ดีเซล': 'diesel_b7', 'diesel': 'diesel_b7',
+      'premium': 'premium',
+    };
+
+    function parseFuelList(text) {
+      if (!text) return {};
+      const fuel = {};
+      const parts = text.split(/[\s,;]+/).map(p => p.trim().toLowerCase());
+      for (const p of parts) {
+        const key = FUEL_MAP[p];
+        if (key) fuel[key] = 'available';
+      }
+      return fuel;
+    }
+
+    function parseFuelOutList(text) {
+      if (!text) return {};
+      const fuel = {};
+      const parts = text.split(/[\s,;]+/).map(p => p.trim().toLowerCase());
+      for (const p of parts) {
+        const key = FUEL_MAP[p];
+        if (key) fuel[key] = 'out';
+      }
+      return fuel;
+    }
+
+    let added = 0, updated = 0, skipped = 0;
+    const seen = new Set();
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(delim).map(c => c.trim());
+      const districtName = cols[colMap.district] || '';
+      const stationName = cols[colMap.name] || '';
+      const availText = cols[colMap.available] || '';
+      const outText = colMap.outOfStock !== undefined ? (cols[colMap.outOfStock] || '') : '';
+      const mapLink = colMap.mapLink !== undefined ? (cols[colMap.mapLink] || '') : '';
+
+      if (!stationName || stationName.length < 3) continue;
+
+      // กรองซ้ำ
+      const key = stationName.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      // หา district_id
+      let distId = 1;
+      for (const [name, id] of Object.entries(DISTRICT_MAP)) {
+        if (districtName.includes(name)) { distId = id; break; }
+      }
+
+      // หา brand
+      const brand = detectBrandFromText(stationName);
+
+      // หา fuel status
+      const fuelAvail = parseFuelList(availText);
+      const fuelOut = parseFuelOutList(outText);
+      const fuel = { ...fuelAvail, ...fuelOut };
+
+      // ดึงพิกัดจาก Google Maps link
+      let lat = null, lng = null;
+      if (mapLink) {
+        const m = mapLink.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+                  mapLink.match(/query=(-?\d+\.\d+),(-?\d+\.\d+)/);
+        if (m) { lat = +m[1]; lng = +m[2]; }
+      }
+
+      // ค้นหาปั๊มที่มีอยู่
+      const findRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/stations?name=ilike.*${encodeURIComponent(stationName.substring(0, 25))}*&select=id`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+      );
+      const existing = await findRes.json();
+
+      let stationId;
+      if (Array.isArray(existing) && existing.length > 0) {
+        stationId = existing[0].id;
+        // อัพเดทพิกัดถ้ามี
+        if (lat && lng) {
+          await fetch(`${SUPABASE_URL}/rest/v1/stations?id=eq.${stationId}`, {
+            method: 'PATCH',
+            headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lat, lng }),
+          });
+        }
+        skipped++;
+      } else {
+        const insRes = await fetch(`${SUPABASE_URL}/rest/v1/stations`, {
+          method: 'POST',
+          headers: {
+            'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
+            'Content-Type': 'application/json', 'Prefer': 'return=representation',
+          },
+          body: JSON.stringify({
+            name: stationName.substring(0, 100), brand, district_id: distId,
+            lat, lng,
+            osm_id: 'csv/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+            is_open: true,
+          }),
+        });
+        if (!insRes.ok) continue;
+        const ins = await insRes.json();
+        stationId = ins[0]?.id;
+        if (!stationId) continue;
+        added++;
+      }
+
+      // Insert fuel reports
+      if (stationId && Object.keys(fuel).length > 0) {
+        const reports = Object.entries(fuel).map(([type, status]) => ({
+          station_id: stationId, fuel_type: type, status,
+        }));
+        await fetch(`${SUPABASE_URL}/rest/v1/fuel_reports`, {
+          method: 'POST',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(reports),
+        });
+        updated++;
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `อ่านได้ ${lines.length - 1} แถว, เพิ่มใหม่ ${added}, อัพเดท ${updated}, มีอยู่แล้ว ${skipped}`,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH support for stations
+app.patch('/api/stations/:id', async (req, res) => {
+  // proxy to supabase - not needed since we use REST directly
+  res.json({ ok: true });
+});
+
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
