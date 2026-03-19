@@ -141,12 +141,14 @@
 
     <div class="price-section">
         <div class="price-header" onclick="togglePriceTable()" style="cursor:pointer;">
-            <span id="price-summary">⛽ เปรียบเทียบราคาตามแบรนด์</span>
+            <span id="price-summary">⛽ ราคาน้ำมันตามแบรนด์</span>
             <button class="btn-toggle" id="btn-toggle-price" onclick="event.stopPropagation(); togglePriceTable()">📊 ดูราคา</button>
-            <button class="btn-refresh" id="btn-refresh-price" onclick="event.stopPropagation(); refreshPrices()">อัพเดทราคาล่าสุด</button>
         </div>
         <div class="price-table-wrap" id="price-table-wrap">
             <table class="price-table" id="price-table"></table>
+            <div id="price-save-bar" style="display:none;padding:8px 16px;text-align:right;">
+                <button onclick="saveBrandPrices()" style="padding:8px 20px;border-radius:8px;border:none;background:#e74c3c;color:#fff;font-weight:600;cursor:pointer;">💾 บันทึกราคา</button>
+            </div>
         </div>
     </div>
 
@@ -276,8 +278,6 @@ const FUEL_TYPES = [
 const STATUS_TEXT = { available: 'มี', low: 'น้อย', out: 'หมด', none: 'ไม่มี' };
 const STATUS_ICON = { available: '🟢', low: '🟡', out: '🔴', none: '⚫' };
 
-// เก็บราคาก่อนหน้าสำหรับเทียบ
-let prevBrandPrices = JSON.parse(localStorage.getItem('prevBrandPrices') || '{}');
 
 let allStations = [];
 let districts = [];
@@ -318,6 +318,7 @@ async function doAuth(mode) {
 // === Load Data ===
 async function loadAll() {
     showLoading();
+    await loadBrandPrices();
     const { data: dData } = await sb.from('districts').select('*').order('id');
     districts = dData || [];
     document.getElementById('filter-district').innerHTML = '<option value="">ทุกอำเภอ</option>' +
@@ -357,33 +358,30 @@ async function loadAll() {
     updatePriceByBrand();
 }
 
-// === ตารางราคาแยกตามแบรนด์ + เทียบก่อน-หลัง ===
-function updatePriceByBrand() {
-    const brands = {};
-    for (const s of allStations) {
-        for (const [type, f] of Object.entries(s.fuel)) {
-            if (!f.price) continue;
-            if (!brands[s.brand]) brands[s.brand] = {};
-            if (!brands[s.brand][type] || +f.price < +brands[s.brand][type]) {
-                brands[s.brand][type] = +f.price;
-            }
+// === ราคาน้ำมันตามแบรนด์ (กรอกเอง) ===
+let brandPricesDB = {}; // { 'PTT_diesel_b7': 29.94, ... }
+
+async function loadBrandPrices() {
+    const { data } = await sb.from('brand_prices').select('*');
+    brandPricesDB = {};
+    if (data) {
+        for (const row of data) {
+            brandPricesDB[`${row.brand}_${row.fuel_type}`] = +row.price;
         }
     }
+}
 
-    const brandNames = Object.keys(brands).sort();
-    if (!brandNames.length) {
-        document.getElementById('price-summary').textContent = '⛽ ยังไม่มีข้อมูลราคา — กดอัพเดทราคาเพื่อดึงล่าสุด';
-        return;
-    }
+function getBrandPrice(brand, fuelKey) {
+    return brandPricesDB[`${brand}_${fuelKey}`] || null;
+}
 
-    // หาราคาต่ำสุดแต่ละชนิด
-    const minPrices = {};
-    for (const ft of FUEL_TYPES) {
-        const all = brandNames.map(b => brands[b][ft.key]).filter(Boolean);
-        if (all.length) minPrices[ft.key] = Math.min(...all);
-    }
+function updatePriceByBrand() {
+    const allBrands = [...new Set(allStations.map(s => s.brand))].sort();
+    if (!allBrands.length) return;
 
-    document.getElementById('price-summary').textContent = `⛽ เปรียบเทียบราคาตามแบรนด์ ${brandNames.length} เจ้า (กดเพื่อดู/ซ่อน)`;
+    const isLoggedIn = !!currentUser;
+    document.getElementById('price-save-bar').style.display = isLoggedIn ? 'block' : 'none';
+    document.getElementById('price-summary').textContent = `⛽ ราคาน้ำมันตามแบรนด์ ${allBrands.length} เจ้า (กดเพื่อดู/ซ่อน)`;
 
     const table = document.getElementById('price-table');
     table.innerHTML = `
@@ -392,38 +390,63 @@ function updatePriceByBrand() {
             ${FUEL_TYPES.map(ft => `<th>${ft.short}</th>`).join('')}
         </tr></thead>
         <tbody>
-        ${brandNames.map(brand => `<tr>
-            <td>${brand}</td>
+        ${allBrands.map(brand => `<tr>
+            <td style="font-weight:600;">${brand}</td>
             ${FUEL_TYPES.map(ft => {
-                const price = brands[brand][ft.key];
-                if (!price) return '<td class="p-na">-</td>';
-                const isCheapest = price === minPrices[ft.key];
-                const prevKey = `${brand}_${ft.key}`;
-                const prev = prevBrandPrices[prevKey];
-                let diffHtml = '';
-                if (prev !== undefined && prev !== price) {
-                    const diff = price - prev;
-                    const cls = diff > 0 ? 'up' : diff < 0 ? 'down' : 'same';
-                    const sign = diff > 0 ? '+' : '';
-                    diffHtml = `<span class="p-diff ${cls}">${sign}${diff.toFixed(2)}</span>`;
-                } else if (prev === price) {
-                    diffHtml = '<span class="p-diff same">-</span>';
+                const price = getBrandPrice(brand, ft.key);
+                if (isLoggedIn) {
+                    return `<td><input type="number" step="0.01" min="0" max="99"
+                        data-brand="${brand}" data-fuel="${ft.key}"
+                        value="${price || ''}" placeholder="-"
+                        style="width:70px;padding:4px;border:1px solid #e2e8f0;border-radius:4px;text-align:center;font-size:0.9rem;"
+                    ></td>`;
+                } else {
+                    return price
+                        ? `<td class="p-val">${price.toFixed(2)}</td>`
+                        : '<td class="p-na">-</td>';
                 }
-                return `<td class="p-val ${isCheapest ? 'cheapest' : ''}">${price.toFixed(2)}${isCheapest ? ' ★' : ''}${diffHtml}</td>`;
             }).join('')}
         </tr>`).join('')}
         </tbody>
     `;
+}
 
-    // เก็บราคาปัจจุบันเป็น prev สำหรับรอบถัดไป
-    const newPrev = {};
-    for (const brand of brandNames) {
-        for (const ft of FUEL_TYPES) {
-            if (brands[brand][ft.key]) newPrev[`${brand}_${ft.key}`] = brands[brand][ft.key];
+async function saveBrandPrices() {
+    const inputs = document.querySelectorAll('#price-table input[data-brand]');
+    const rows = [];
+    inputs.forEach(input => {
+        const price = parseFloat(input.value);
+        if (price > 0) {
+            rows.push({
+                brand: input.dataset.brand,
+                fuel_type: input.dataset.fuel,
+                price,
+            });
         }
+    });
+
+    if (!rows.length) { toast('⚠️ กรุณากรอกราคาอย่างน้อย 1 ช่อง'); return; }
+
+    showFullLoading('กำลังบันทึกราคา...', `${rows.length} รายการ`);
+
+    try {
+        // upsert ทีละรายการ (brand + fuel_type unique)
+        for (const row of rows) {
+            const { error } = await sb.from('brand_prices').upsert(
+                { brand: row.brand, fuel_type: row.fuel_type, price: row.price, updated_at: new Date().toISOString() },
+                { onConflict: 'brand,fuel_type' }
+            );
+            if (error) throw error;
+        }
+
+        hideFullLoading();
+        toast(`✅ บันทึกราคา ${rows.length} รายการสำเร็จ`);
+        await loadBrandPrices();
+        updatePriceByBrand();
+    } catch (err) {
+        hideFullLoading();
+        toast('❌ ' + err.message);
     }
-    prevBrandPrices = newPrev;
-    localStorage.setItem('prevBrandPrices', JSON.stringify(newPrev));
 }
 
 function togglePriceTable() {
@@ -439,21 +462,6 @@ function togglePriceTable() {
     }
 }
 
-async function refreshPrices() {
-    const btn = document.getElementById('btn-refresh-price');
-    btn.disabled = true; btn.textContent = 'กำลังดึงราคา...';
-    showFullLoading('กำลังอัพเดทราคาน้ำมัน', 'ดึงราคาล่าสุด + อัพเดททุกปั๊ม...');
-    try {
-        const res = await fetch('/api/refresh-prices', { method: 'POST' });
-        const data = await res.json();
-        hideFullLoading();
-        if (data.error) { toast('❌ ' + data.error); return; }
-        toast(`✅ อัพเดทราคา ${data.updated} ปั๊ม`);
-        await loadAll();
-        document.getElementById('price-table-wrap').classList.add('open');
-    } catch (err) { hideFullLoading(); toast('❌ ' + err.message); }
-    btn.disabled = false; btn.textContent = 'อัพเดทราคาล่าสุด';
-}
 
 function updateSubdistrictFilter() {
     const distId = document.getElementById('filter-district').value;
@@ -514,7 +522,9 @@ function renderStations(list) {
         const fuelCells = FUEL_TYPES.map(ft => {
             const f = s.fuel[ft.key];
             if (!f) return `<div class="fuel-cell unknown"><div class="fc-type">${ft.short}</div><div>-</div></div>`;
-            const priceStr = f.price ? `<div class="fc-price">฿${Number(f.price).toFixed(2)}</div>` : '';
+            // ใช้ราคาเฉพาะปั๊ม → ถ้าไม่มีใช้ราคาแบรนด์
+            const stPrice = f.price ? +f.price : getBrandPrice(s.brand, ft.key);
+            const priceStr = stPrice ? `<div class="fc-price">฿${stPrice.toFixed(2)}</div>` : '';
             return `<div class="fuel-cell ${f.status}"><div class="fc-type">${ft.short}</div><div>${STATUS_TEXT[f.status]}</div>${priceStr}</div>`;
         }).join('');
 
