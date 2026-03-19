@@ -311,24 +311,35 @@ app.post('/api/import-pdf', upload.single('pdf'), async (req, res) => {
       return res.json({ success: false, message: 'ไม่พบข้อมูลปั๊มใน PDF', rawText: data.text.substring(0, 2000) });
     }
 
+    // กรองซ้ำ: ถ้าชื่อเหมือนกัน เอาแค่อันแรก
+    const seen = new Set();
+    const unique = parsed.filter(s => {
+      const key = s.name.toLowerCase().trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
     const SUPABASE_URL = 'https://tekcyzixbsuankaiuncs.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_7VRgnntgw8VyGVgC8mTLrA_rnaE2vm0';
 
-    let added = 0, updated = 0;
+    let added = 0, updated = 0, skipped = 0;
 
-    for (const station of parsed) {
-      // Insert or find station
+    for (const station of unique) {
+      // ค้นหาปั๊มที่ชื่อตรงหรือคล้ายกัน
       const findRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/stations?name=eq.${encodeURIComponent(station.name)}&select=id`,
+        `${SUPABASE_URL}/rest/v1/stations?name=ilike.*${encodeURIComponent(station.name.substring(0, 30))}*&select=id,name`,
         { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
       );
       const existing = await findRes.json();
 
       let stationId;
-      if (existing.length > 0) {
+      if (Array.isArray(existing) && existing.length > 0) {
+        // มีอยู่แล้ว ใช้ ID เดิม
         stationId = existing[0].id;
+        skipped++;
       } else {
-        // Insert new station
+        // Insert ปั๊มใหม่
         const insRes = await fetch(`${SUPABASE_URL}/rest/v1/stations`, {
           method: 'POST',
           headers: {
@@ -338,7 +349,7 @@ app.post('/api/import-pdf', upload.single('pdf'), async (req, res) => {
           body: JSON.stringify({
             name: station.name, brand: station.brand,
             district_id: station.district_id,
-            osm_id: 'pdf/' + Date.now() + '-' + Math.random().toString(36).substr(2, 6),
+            osm_id: 'pdf/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
             is_open: true,
           }),
         });
@@ -349,8 +360,8 @@ app.post('/api/import-pdf', upload.single('pdf'), async (req, res) => {
         added++;
       }
 
-      // Insert fuel reports
-      if (Object.keys(station.fuel).length > 0) {
+      // Insert fuel reports (ถ้ามีข้อมูล)
+      if (stationId && Object.keys(station.fuel).length > 0) {
         const reports = Object.entries(station.fuel).map(([type, status]) => ({
           station_id: stationId, fuel_type: type, status,
         }));
@@ -368,9 +379,54 @@ app.post('/api/import-pdf', upload.single('pdf'), async (req, res) => {
 
     res.json({
       success: true,
-      message: `พบ ${parsed.length} ปั๊ม, เพิ่มใหม่ ${added}, อัพเดทสถานะ ${updated}`,
-      stations: parsed.map(s => ({ name: s.name, brand: s.brand, fuel: s.fuel })),
+      message: `พบ ${parsed.length} รายการ (ซ้ำ ${parsed.length - unique.length}), เพิ่มใหม่ ${added}, อัพเดท ${updated}, มีอยู่แล้ว ${skipped}`,
+      stations: unique.map(s => ({ name: s.name, brand: s.brand, fuel: s.fuel })),
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/cleanup-duplicates — ลบปั๊มซ้ำ (เก็บอันแรก)
+app.delete('/api/cleanup-duplicates', async (req, res) => {
+  try {
+    const SUPABASE_URL = 'https://tekcyzixbsuankaiuncs.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_7VRgnntgw8VyGVgC8mTLrA_rnaE2vm0';
+
+    // ดึงปั๊มทั้งหมด
+    const stRes = await fetch(`${SUPABASE_URL}/rest/v1/stations?select=id,name&order=id`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` },
+    });
+    const stations = await stRes.json();
+    if (!Array.isArray(stations)) return res.json({ removed: 0 });
+
+    // หา duplicates (ชื่อซ้ำ เก็บ id แรก ลบที่เหลือ)
+    const seen = {};
+    const toDelete = [];
+    for (const s of stations) {
+      const key = s.name.toLowerCase().trim();
+      if (seen[key]) {
+        toDelete.push(s.id);
+      } else {
+        seen[key] = s.id;
+      }
+    }
+
+    if (!toDelete.length) return res.json({ removed: 0, message: 'ไม่มีข้อมูลซ้ำ' });
+
+    // ลบ fuel_reports ของปั๊มซ้ำก่อน
+    for (const id of toDelete) {
+      await fetch(`${SUPABASE_URL}/rest/v1/fuel_reports?station_id=eq.${id}`, {
+        method: 'DELETE',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` },
+      });
+      await fetch(`${SUPABASE_URL}/rest/v1/stations?id=eq.${id}`, {
+        method: 'DELETE',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` },
+      });
+    }
+
+    res.json({ removed: toDelete.length, message: `ลบปั๊มซ้ำ ${toDelete.length} รายการ` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -169,6 +169,7 @@
     <div class="container" id="station-list"></div>
 
     <div style="position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:10px;z-index:50;">
+        <button class="fab" onclick="cleanupDuplicates()" title="ลบข้อมูลซ้ำ" style="position:static;width:44px;height:44px;font-size:1rem;background:#ef4444;box-shadow:0 4px 16px rgba(239,68,68,0.3);">🗑</button>
         <button class="fab" onclick="triggerPdfUpload()" title="นำเข้า PDF" style="position:static;width:44px;height:44px;font-size:1rem;background:#8b5cf6;box-shadow:0 4px 16px rgba(139,92,246,0.3);">📄</button>
         <button class="fab" onclick="openAddStationModal()" title="เพิ่มปั๊ม" style="position:static;width:44px;height:44px;font-size:1rem;background:#3b82f6;box-shadow:0 4px 16px rgba(59,130,246,0.3);">🏪</button>
         <button class="fab" onclick="openReportModal()" title="รายงาน" style="position:static;">+</button>
@@ -623,6 +624,18 @@ function toast(msg) {
     document.body.appendChild(t); setTimeout(() => t.remove(), 3000);
 }
 document.head.appendChild(Object.assign(document.createElement('style'), { textContent: '@keyframes fadeOut{0%,70%{opacity:1}100%{opacity:0}}' }));
+
+// === Cleanup Duplicates ===
+async function cleanupDuplicates() {
+    if (!confirm('ลบปั๊มที่ชื่อซ้ำกัน? (เก็บอันแรก ลบที่เหลือ)')) return;
+    toast('กำลังลบข้อมูลซ้ำ...');
+    try {
+        const res = await fetch('/api/cleanup-duplicates', { method: 'DELETE' });
+        const data = await res.json();
+        toast(data.removed > 0 ? `✅ ${data.message}` : '✅ ไม่มีข้อมูลซ้ำ');
+        if (data.removed > 0) await loadAll();
+    } catch (err) { toast('❌ ' + err.message); }
+}
 
 // === PDF Import ===
 function triggerPdfUpload() {
