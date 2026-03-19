@@ -168,8 +168,7 @@
 
     <div class="container" id="station-list"></div>
 
-    <div style="position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:10px;z-index:50;">
-        <button class="fab" onclick="cleanupDuplicates()" title="ลบข้อมูลซ้ำ" style="position:static;width:44px;height:44px;font-size:1rem;background:#ef4444;box-shadow:0 4px 16px rgba(239,68,68,0.3);">🗑</button>
+    <div id="fab-menu" style="position:fixed;bottom:20px;right:20px;display:none;flex-direction:column;gap:10px;z-index:50;">
         <button class="fab" onclick="triggerFileUpload()" title="นำเข้าไฟล์ (CSV/PDF)" style="position:static;width:44px;height:44px;font-size:1rem;background:#8b5cf6;box-shadow:0 4px 16px rgba(139,92,246,0.3);">📄</button>
         <button class="fab" onclick="openAddStationModal()" title="เพิ่มปั๊ม" style="position:static;width:44px;height:44px;font-size:1rem;background:#3b82f6;box-shadow:0 4px 16px rgba(59,130,246,0.3);">🏪</button>
         <button class="fab" onclick="openReportModal()" title="รายงาน" style="position:static;">+</button>
@@ -281,11 +280,14 @@ async function initAuth() {
 function setUser(user) {
     currentUser = user;
     const el = document.getElementById('auth-area');
+    const fab = document.getElementById('fab-menu');
     if (user) {
         el.innerHTML = `<span class="user-name">${user.email.split('@')[0]}</span>
             <button class="btn-auth logout" onclick="sb.auth.signOut()">ออก</button>`;
+        fab.style.display = 'flex';
     } else {
         el.innerHTML = `<button class="btn-auth" onclick="openModal('auth-modal')">เข้าสู่ระบบ</button>`;
+        fab.style.display = 'none';
     }
 }
 async function doAuth(mode) {

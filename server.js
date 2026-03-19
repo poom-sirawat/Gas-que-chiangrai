@@ -272,27 +272,50 @@ function parsePdfText(text) {
     // หา brand
     const brand = detectBrandFromText(restLine);
 
+    // แยก fuel codes ที่ติดกัน เช่น B7G91 → B7 G91
+    const cleanLine = line.replace(/([A-Z]\d{1,2})([A-Z]\d{1,2})/gi, '$1 $2');
+
     // หา fuel types ที่กล่าวถึง (G95, G91, E20, E85, B7)
     const fuel = {};
     for (const [code, key] of Object.entries(FUEL_CODES)) {
-      if (new RegExp('\\b' + code + '\\b', 'i').test(line)) {
+      if (new RegExp(code, 'i').test(cleanLine)) {
         fuel[key] = 'available';
       }
     }
 
     // ดึง Google Maps URL
-    const urlMatch = line.match(/(https?:\/\/[^\s]+)/);
+    const urlMatch = cleanLine.match(/(https?:\/\/[^\s]+)/);
     let lat = null, lng = null;
     if (urlMatch) {
       const coordMatch = urlMatch[1].match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
       if (coordMatch) { lat = +coordMatch[1]; lng = +coordMatch[2]; }
     }
 
-    // ดึงชื่อปั๊ม: ตัด district, fuel codes, URL, dates ออก
+    // ดึงชื่อปั๊ม: ตัด district, fuel codes, URL, dates, เวลา ออก
     let stationName = restLine
       .replace(/(https?:\/\/\S+)/g, '')
       .replace(/\b(G95|G91|E20|E85|B7|Premium)\b/gi, '')
       .replace(/\d{1,2}\/\d{1,2}\/\d{4}[,\s\d:]*/g, '')
+      .replace(/\d{1,2}:\d{2}:\d{2}/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // ลบอักขระแปลกๆ จาก PDF encoding
+    stationName = stationName
+      .replace(/[ฟφ]/g, 'ิ')
+      .replace(/[ว]/g, (m, i, s) => s[i-1] === 'เ' && s[i+1] === 'ย' ? 'ี' : m)
+      .replace(/ปตส/g, 'ปัส')
+      .replace(/หางหุนสวน/g, 'ห้างหุ้นส่วน')
+      .replace(/บรऴษัท/g, 'บริษัท')
+      .replace(/ปफ/g, 'ปิ')
+      .replace(/เจรऴญ/g, 'เจริญ')
+      .replace(/ปफย/g, 'ปิย')
+      .replace(/นญา/g, 'น้ำ')
+      .replace(/ศรว/g, 'ศรี')
+      .replace(/เววย/g, 'เวีย')
+      .replace(/สหกรณ([^์])/g, 'สหกรณ์$1')
+      .replace(/คอปऩ/g, 'คอร์ป')
+      .replace(/ปตท\./g, 'ปตท.')
       .replace(/\s+/g, ' ')
       .trim();
 
@@ -324,10 +347,10 @@ app.post('/api/import-pdf', upload.single('pdf'), async (req, res) => {
       return res.json({ success: false, message: 'ไม่พบข้อมูลปั๊มใน PDF', rawText: data.text.substring(0, 2000) });
     }
 
-    // กรองซ้ำ: ถ้าชื่อเหมือนกัน เอาแค่อันแรก
+    // กรองซ้ำใน PDF เอง: brand + district เดียวกัน เอาแค่อันแรก
     const seen = new Set();
     const unique = parsed.filter(s => {
-      const key = s.name.toLowerCase().trim();
+      const key = `${s.brand}_${s.district_id}_${s.name.substring(0, 20).toLowerCase()}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -336,21 +359,54 @@ app.post('/api/import-pdf', upload.single('pdf'), async (req, res) => {
     const SUPABASE_URL = 'https://tekcyzixbsuankaiuncs.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_7VRgnntgw8VyGVgC8mTLrA_rnaE2vm0';
 
-    let added = 0, updated = 0, skipped = 0;
+    // ดึงปั๊มทั้งหมดใน DB มาเช็คซ้ำ
+    const allRes = await fetch(`${SUPABASE_URL}/rest/v1/stations?select=id,name,brand,district_id`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` },
+    });
+    const allStations = await allRes.json();
+
+    // ฟังก์ชันเช็คว่าปั๊มซ้ำมั้ย (brand + district + ชื่อคล้าย)
+    function findExisting(station) {
+      // 1. เช็ค brand + district ตรงกัน
+      const sameBrandDist = allStations.filter(s =>
+        s.brand === station.brand && s.district_id === station.district_id
+      );
+      if (!sameBrandDist.length) return null;
+
+      // 2. เช็คชื่อคล้ายกัน (ตัดคำสั้นๆ มาเทียบ)
+      const words = station.name.toLowerCase().replace(/[^ก-๙a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+      for (const existing of sameBrandDist) {
+        const existName = existing.name.toLowerCase();
+        // ถ้ามีคำตรงกัน 2+ คำ → น่าจะเป็นปั๊มเดียวกัน
+        const matchCount = words.filter(w => existName.includes(w)).length;
+        if (matchCount >= 2 || (words.length <= 2 && matchCount >= 1)) return existing;
+        // หรือชื่อสั้นๆ ตรงกัน
+        if (existName.includes(station.name.substring(0, 15).toLowerCase())) return existing;
+      }
+
+      // 3. ถ้า brand เดียวกัน + district เดียวกัน + มีแค่ปั๊มเดียว → น่าจะตัวเดียวกัน
+      if (sameBrandDist.length === 1) return sameBrandDist[0];
+
+      return null;
+    }
+
+    let added = 0, updated = 0;
 
     for (const station of unique) {
-      // ค้นหาปั๊มที่ชื่อตรงหรือคล้ายกัน
-      const findRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/stations?name=ilike.*${encodeURIComponent(station.name.substring(0, 30))}*&select=id,name`,
-        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
-      );
-      const existing = await findRes.json();
+      const existing = findExisting(station);
 
       let stationId;
-      if (Array.isArray(existing) && existing.length > 0) {
-        // มีอยู่แล้ว ใช้ ID เดิม
-        stationId = existing[0].id;
-        skipped++;
+      if (existing) {
+        stationId = existing.id;
+        // อัพเดทพิกัดถ้ามีใหม่
+        if (station.lat && station.lng) {
+          await fetch(`${SUPABASE_URL}/rest/v1/stations?id=eq.${stationId}`, {
+            method: 'PATCH',
+            headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lat: station.lat, lng: station.lng }),
+          });
+        }
+        updated++;
       } else {
         // Insert ปั๊มใหม่
         const insRes = await fetch(`${SUPABASE_URL}/rest/v1/stations`, {
@@ -393,7 +449,7 @@ app.post('/api/import-pdf', upload.single('pdf'), async (req, res) => {
 
     res.json({
       success: true,
-      message: `พบ ${parsed.length} รายการ (ซ้ำ ${parsed.length - unique.length}), เพิ่มใหม่ ${added}, อัพเดท ${updated}, มีอยู่แล้ว ${skipped}`,
+      message: `พบ ${parsed.length} รายการ, เพิ่มใหม่ ${added}, อัพเดทปั๊มเดิม ${updated}`,
       stations: unique.map(s => ({ name: s.name, brand: s.brand, fuel: s.fuel })),
     });
   } catch (err) {
