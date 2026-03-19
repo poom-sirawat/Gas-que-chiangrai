@@ -672,7 +672,7 @@ app.post('/api/import-csv', upload.single('file'), async (req, res) => {
       return fuel;
     }
 
-    let added = 0, updated = 0;
+    let added = 0, updated = 0, skipped = 0;
     const seen = new Set();
 
     for (let i = 1; i < lines.length; i++) {
