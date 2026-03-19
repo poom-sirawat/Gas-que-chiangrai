@@ -241,9 +241,11 @@
             <input type="number" id="rpt-cars" min="0" max="99" placeholder="เช่น 5 (ไม่ใส่ก็ได้)">
             <label>ราคาน้ำมัน (บาท/ลิตร — ถ้าทราบ)</label>
             <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
-                <input type="number" id="rpt-price-91" step="0.01" placeholder="91" style="flex:1;min-width:60px">
-                <input type="number" id="rpt-price-95" step="0.01" placeholder="95" style="flex:1;min-width:60px">
-                <input type="number" id="rpt-price-diesel" step="0.01" placeholder="ดีเซล" style="flex:1;min-width:60px">
+                <input type="number" id="rpt-price-diesel" step="0.01" placeholder="ดีเซล" style="flex:1;min-width:55px">
+                <input type="number" id="rpt-price-91" step="0.01" placeholder="91" style="flex:1;min-width:55px">
+                <input type="number" id="rpt-price-95" step="0.01" placeholder="95" style="flex:1;min-width:55px">
+                <input type="number" id="rpt-price-e20" step="0.01" placeholder="E20" style="flex:1;min-width:55px">
+                <input type="number" id="rpt-price-e85" step="0.01" placeholder="เบนซิน" style="flex:1;min-width:55px">
             </div>
             <label>หมายเหตุ</label>
             <textarea id="rpt-note" placeholder="เช่น ดีเซลหมดตั้งแต่เช้า"></textarea>
@@ -566,9 +568,11 @@ let stationIsOpen = true;
 function resetForm() {
     fuelStatusForm = {}; stationIsOpen = true;
     document.getElementById('rpt-cars').value = '';
+    document.getElementById('rpt-price-diesel').value = '';
     document.getElementById('rpt-price-91').value = '';
     document.getElementById('rpt-price-95').value = '';
-    document.getElementById('rpt-price-diesel').value = '';
+    document.getElementById('rpt-price-e20').value = '';
+    document.getElementById('rpt-price-e85').value = '';
     document.getElementById('rpt-note').value = '';
     updateStatusButtons(); renderFuelStatusGrid();
 }
@@ -597,7 +601,13 @@ async function submitReport() {
     const btn = document.getElementById('rpt-submit'); btn.disabled = true;
     const cars = parseInt(document.getElementById('rpt-cars').value) || 0;
     const note = document.getElementById('rpt-note').value.trim();
-    const prices = { gasohol_91: parseFloat(document.getElementById('rpt-price-91').value) || null, gasohol_95: parseFloat(document.getElementById('rpt-price-95').value) || null, diesel_b7: parseFloat(document.getElementById('rpt-price-diesel').value) || null };
+    const prices = {
+        diesel_b7: parseFloat(document.getElementById('rpt-price-diesel').value) || null,
+        gasohol_91: parseFloat(document.getElementById('rpt-price-91').value) || null,
+        gasohol_95: parseFloat(document.getElementById('rpt-price-95').value) || null,
+        gasohol_e20: parseFloat(document.getElementById('rpt-price-e20').value) || null,
+        gasohol_e85: parseFloat(document.getElementById('rpt-price-e85').value) || null,
+    };
     try {
         await sb.from('stations').update({ is_open: stationIsOpen }).eq('id', stationId);
         const rows = FUEL_TYPES.map(ft => ({ station_id: stationId, user_id: currentUser.id, fuel_type: ft.key, status: fuelStatusForm[ft.key] || 'available', price: prices[ft.key] || null, queue_cars: cars, note: note || null }));
