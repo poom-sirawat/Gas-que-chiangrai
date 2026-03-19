@@ -537,6 +537,7 @@ function renderStations(list) {
             <div class="sc-footer">
                 <a href="${mapUrl}" target="_blank" onclick="event.stopPropagation()" style="color:#3b82f6;text-decoration:none;">📍 แผนที่</a>
                 <span>${Object.keys(s.fuel).length > 0 ? 'อัปเดต ' + Object.values(s.fuel).map(f => f.age + ' นาที').sort()[0] + ' ที่แล้ว' : 'ยังไม่มีรายงาน'}</span>
+                ${currentUser ? `<a href="#" onclick="event.stopPropagation(); deleteStation(${s.id}, '${s.name.replace(/'/g, "\\'")}'); return false;" style="color:#dc2626;text-decoration:none;font-size:0.7rem;">🗑 ลบ</a>` : ''}
             </div>
         </div>`;
     }).join('');
@@ -652,6 +653,17 @@ async function submitAddStation() {
         closeModal('add-station-modal'); toast('✅ เพิ่มปั๊ม "' + name + '" สำเร็จ!'); await loadAll();
     } catch (err) { toast('❌ ' + err.message); }
     btn.disabled = false;
+}
+
+// === Delete Station ===
+async function deleteStation(id, name) {
+    if (!confirm('ลบปั๊ม "' + name + '" ?\n\n(จะลบรายงานทั้งหมดของปั๊มนี้ด้วย)')) return;
+    try {
+        await sb.from('fuel_reports').delete().eq('station_id', id);
+        await sb.from('stations').delete().eq('id', id);
+        toast('✅ ลบปั๊ม "' + name + '" แล้ว');
+        await loadAll();
+    } catch (err) { toast('❌ ' + err.message); }
 }
 
 // === Helpers ===
