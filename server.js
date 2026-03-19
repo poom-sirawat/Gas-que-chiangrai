@@ -605,6 +605,8 @@ app.post('/api/import-csv', upload.single('file'), async (req, res) => {
 
     // หา column index
     const colMap = {};
+    const fuelCols = {}; // { column_index: fuel_key }
+
     header.forEach((h, i) => {
       if (/อำเภอ|อําเภอ|district/.test(h)) colMap.district = i;
       if (/ชื่อ|สถานี|station|name/.test(h)) colMap.name = i;
@@ -613,15 +615,27 @@ app.post('/api/import-csv', upload.single('file'), async (req, res) => {
       if (/google|map|ลิงก์|link/.test(h)) colMap.mapLink = i;
       if (/อัปเดท|update|ประทับ|เวลา/.test(h)) colMap.updated = i;
       if (/กำหนด|เข้า|delivery/.test(h)) colMap.delivery = i;
+      if (/พิกัด|สถานที่|ใกล้เคียง|ตำบล|location/.test(h)) colMap.location = i;
+
+      // ตรวจ column น้ำมันแยกแต่ละชนิด (format ใหม่)
+      if (/^g95$|gasohol\s*95|แก๊สโซฮอล์\s*95/.test(h)) fuelCols[i] = 'gasohol_95';
+      if (/^g91$|gasohol\s*91|แก๊สโซฮอล์\s*91/.test(h)) fuelCols[i] = 'gasohol_91';
+      if (/^e20$|gasohol\s*e20|แก๊สโซฮอล์\s*e20/.test(h)) fuelCols[i] = 'gasohol_e20';
+      if (/^e85$|gasohol\s*e85|เบนซิน|benzene/.test(h)) fuelCols[i] = 'gasohol_e85';
+      if (/^b7|ดีเซล|diesel/.test(h)) fuelCols[i] = 'diesel_b7';
+      if (/premium|พรีเมียม/.test(h)) fuelCols[i] = 'premium';
     });
+
+    const hasFuelCols = Object.keys(fuelCols).length > 0;
 
     // ถ้าหา column ไม่ได้ ลองใช้ตำแหน่งตามรูปแบบที่เห็น
     if (!colMap.name && header.length >= 3) {
-      colMap.district = 0;
-      colMap.name = 1;
-      colMap.available = 2;
-      colMap.outOfStock = header.length > 3 ? 3 : undefined;
-      colMap.mapLink = header.length > 4 ? 4 : undefined;
+      colMap.district = colMap.district ?? 1;
+      colMap.name = colMap.name ?? 2;
+      if (!hasFuelCols) {
+        colMap.available = 3;
+        colMap.outOfStock = header.length > 4 ? 4 : undefined;
+      }
     }
 
     const SUPABASE_URL = 'https://tekcyzixbsuankaiuncs.supabase.co';
@@ -658,16 +672,15 @@ app.post('/api/import-csv', upload.single('file'), async (req, res) => {
       return fuel;
     }
 
-    let added = 0, updated = 0, skipped = 0;
+    let added = 0, updated = 0;
     const seen = new Set();
 
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(delim).map(c => c.trim());
       const districtName = cols[colMap.district] || '';
       const stationName = cols[colMap.name] || '';
-      const availText = cols[colMap.available] || '';
-      const outText = colMap.outOfStock !== undefined ? (cols[colMap.outOfStock] || '') : '';
       const mapLink = colMap.mapLink !== undefined ? (cols[colMap.mapLink] || '') : '';
+      const locationText = colMap.location !== undefined ? (cols[colMap.location] || '') : '';
 
       if (!stationName || stationName.length < 3) continue;
 
@@ -686,9 +699,35 @@ app.post('/api/import-csv', upload.single('file'), async (req, res) => {
       const brand = detectBrandFromText(stationName);
 
       // หา fuel status
-      const fuelAvail = parseFuelList(availText);
-      const fuelOut = parseFuelOutList(outText);
-      const fuel = { ...fuelAvail, ...fuelOut };
+      const fuel = {};
+      if (hasFuelCols) {
+        // Format ใหม่: แต่ละชนิดมี column แยก
+        // "มีขาย" = available, ว่าง = out
+        for (const [colIdx, fuelKey] of Object.entries(fuelCols)) {
+          const val = (cols[+colIdx] || '').trim();
+          if (/มีขาย|มี|available|yes/i.test(val)) {
+            fuel[fuelKey] = 'available';
+          } else if (val === '') {
+            fuel[fuelKey] = 'out';
+          } else if (/หมด|out|no/i.test(val)) {
+            fuel[fuelKey] = 'out';
+          } else if (/น้อย|low/i.test(val)) {
+            fuel[fuelKey] = 'low';
+          } else {
+            fuel[fuelKey] = 'out';
+          }
+        }
+      } else {
+        // Format เก่า: fuel types รวมใน column เดียว
+        const availText = cols[colMap.available] || '';
+        const outText = colMap.outOfStock !== undefined ? (cols[colMap.outOfStock] || '') : '';
+        const fuelAvail = parseFuelList(availText);
+        const fuelOut = parseFuelOutList(outText);
+        Object.assign(fuel, fuelAvail, fuelOut);
+      }
+
+      // ดึง subdistrict จาก column พิกัด/สถานที่
+      const subdistrict = locationText || null;
 
       // ดึงพิกัดจาก Google Maps link
       let lat = null, lng = null;
@@ -726,7 +765,7 @@ app.post('/api/import-csv', upload.single('file'), async (req, res) => {
           },
           body: JSON.stringify({
             name: stationName.substring(0, 100), brand, district_id: distId,
-            lat, lng,
+            subdistrict, lat, lng,
             osm_id: 'csv/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
             is_open: true,
           }),
