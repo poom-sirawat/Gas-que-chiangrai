@@ -133,10 +133,10 @@
     </header>
 
     <div class="price-section">
-        <div class="price-header">
+        <div class="price-header" onclick="togglePriceTable()" style="cursor:pointer;">
             <span id="price-summary">⛽ เปรียบเทียบราคาตามแบรนด์</span>
-            <button class="btn-toggle" id="btn-toggle-price" onclick="togglePriceTable()">📊 ดูราคา</button>
-            <button class="btn-refresh" id="btn-refresh-price" onclick="refreshPrices()">อัพเดทราคาล่าสุด</button>
+            <button class="btn-toggle" id="btn-toggle-price" onclick="event.stopPropagation(); togglePriceTable()">📊 ดูราคา</button>
+            <button class="btn-refresh" id="btn-refresh-price" onclick="event.stopPropagation(); refreshPrices()">อัพเดทราคาล่าสุด</button>
         </div>
         <div class="price-table-wrap" id="price-table-wrap">
             <table class="price-table" id="price-table"></table>
