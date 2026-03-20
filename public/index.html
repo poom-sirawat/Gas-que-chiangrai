@@ -576,7 +576,35 @@ function resetForm() {
     document.getElementById('rpt-note').value = '';
     updateStatusButtons(); renderFuelStatusGrid();
 }
-function onStationSelect() { const s = allStations.find(st => st.id === +document.getElementById('rpt-station').value); if (s) { stationIsOpen = s.is_open; updateStatusButtons(); } }
+function onStationSelect() {
+    const s = allStations.find(st => st.id === +document.getElementById('rpt-station').value);
+    if (!s) return;
+
+    // ดึงสถานะเปิด/ปิด
+    stationIsOpen = s.is_open;
+    updateStatusButtons();
+
+    // ดึงสถานะน้ำมันปัจจุบัน
+    fuelStatusForm = {};
+    for (const ft of FUEL_TYPES) {
+        if (s.fuel[ft.key]) {
+            fuelStatusForm[ft.key] = s.fuel[ft.key].status;
+        }
+    }
+    renderFuelStatusGrid();
+
+    // ดึงราคาปัจจุบัน (เฉพาะปั๊ม → ถ้าไม่มีใช้ราคาแบรนด์)
+    const priceMap = { diesel_b7: 'rpt-price-diesel', gasohol_91: 'rpt-price-91', gasohol_95: 'rpt-price-95', gasohol_e20: 'rpt-price-e20', gasohol_e85: 'rpt-price-e85' };
+    for (const [fuelKey, inputId] of Object.entries(priceMap)) {
+        const stPrice = s.fuel[fuelKey]?.price;
+        const brandPrice = getBrandPrice(s.brand, fuelKey);
+        const price = stPrice ? +stPrice : brandPrice;
+        document.getElementById(inputId).value = price ? price.toFixed(2) : '';
+    }
+
+    // ดึงคิว
+    document.getElementById('rpt-cars').value = s.queue || '';
+}
 function setStationStatus(o) { stationIsOpen = o; updateStatusButtons(); }
 function updateStatusButtons() {
     document.getElementById('btn-open').className = stationIsOpen ? 'fs-btn s-available' : 'fs-btn';
