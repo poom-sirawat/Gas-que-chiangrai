@@ -548,7 +548,7 @@ function renderStations(list) {
             ${queueStr}${noteStr}
             <div class="sc-footer">
                 <a href="${mapUrl}" target="_blank" onclick="event.stopPropagation()" style="color:#3b82f6;text-decoration:none;">📍 แผนที่</a>
-                <span>${Object.keys(s.fuel).length > 0 ? 'อัปเดต ' + Object.values(s.fuel).map(f => f.age + ' นาที').sort()[0] + ' ที่แล้ว' : 'ยังไม่มีรายงาน'}</span>
+                <span>${Object.keys(s.fuel).length > 0 ? 'อัปเดต ' + formatAge(Math.min(...Object.values(s.fuel).map(f => f.age))) + ' ที่แล้ว' : 'ยังไม่มีรายงาน'}</span>
                 ${currentUser ? `<a href="#" onclick="event.stopPropagation(); deleteStation(${s.id}, '${s.name.replace(/'/g, "\\'")}'); return false;" style="color:#dc2626;text-decoration:none;font-size:0.7rem;">🗑 ลบ</a>` : ''}
             </div>
         </div>`;
@@ -713,6 +713,17 @@ window.addEventListener('popstate', function(e) {
         if (btn) { btn.textContent = '📊 ดูราคา'; btn.classList.remove('open'); }
     }
 });
+function formatAge(minutes) {
+    if (minutes < 60) return `${minutes} นาที`;
+    const hrs = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    if (hrs < 24) return mins > 0 ? `${hrs} ชั่วโมง ${mins} นาที` : `${hrs} ชั่วโมง`;
+    const days = Math.floor(hrs / 24);
+    const remHrs = hrs % 24;
+    if (remHrs > 0) return `${days} วัน ${remHrs} ชั่วโมง`;
+    return `${days} วัน`;
+}
+
 function closeModal(id) {
     document.getElementById(id).classList.remove('active');
     if (history.state?.modal) history.back();
