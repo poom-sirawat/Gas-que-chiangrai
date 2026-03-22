@@ -524,6 +524,15 @@ function applyFilters() {
         else filtered = filtered.filter(s => FUEL_TYPES.some(ft => s.fuel[ft.key]?.status === fuelFilter));
     }
 
+    // เรียงจากอัพเดทล่าสุด (ยกเว้นกรองราคาถูกสุด)
+    if (fuelFilter !== 'cheapest') {
+        filtered.sort((a, b) => {
+            const aAge = Object.keys(a.fuel).length > 0 ? Math.min(...Object.values(a.fuel).map(f => f.age)) : 999999;
+            const bAge = Object.keys(b.fuel).length > 0 ? Math.min(...Object.values(b.fuel).map(f => f.age)) : 999999;
+            return aAge - bAge;
+        });
+    }
+
     renderStations(filtered);
 }
 
