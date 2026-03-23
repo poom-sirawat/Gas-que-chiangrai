@@ -701,7 +701,7 @@ async function submitReport() {
     try {
         await sb.from('stations').update({ is_open: stationIsOpen }).eq('id', stationId);
         const rows = FUEL_TYPES.map(ft => ({ station_id: stationId, user_id: currentUser.id, fuel_type: ft.key, status: fuelStatusForm[ft.key] || 'available', price: prices[ft.key] || null, queue_cars: cars, note: note || null }));
-        const { error } = await sb.from('fuel_reports').insert(rows);
+        const { error } = await sb.from('fuel_reports').upsert(rows, { onConflict: 'station_id,fuel_type' });
         if (error) throw error;
         closeModal('report-modal'); toast(`✅ รายงานสำเร็จ!`); await loadAll();
     } catch (err) { toast('❌ ' + err.message); }

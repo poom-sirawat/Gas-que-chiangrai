@@ -187,6 +187,7 @@ app.post('/api/refresh-prices', async (req, res) => {
         'apikey': SUPABASE_KEY,
         'Authorization': `Bearer ${SUPABASE_KEY}`,
         'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates',
       },
       body: JSON.stringify(rows),
     });
