@@ -345,7 +345,7 @@ async function loadAll() {
     if (!sData || !sData.length) { document.getElementById('station-list').innerHTML = '<p style="text-align:center;padding:40px;color:#94a3b8;">ยังไม่มีข้อมูลปั๊ม</p>'; return; }
 
     const ids = sData.map(s => s.id);
-    const { data: reports } = await sb.from('fuel_reports').select('*').in('station_id', ids).order('created_at', { ascending: false });
+    const { data: reports } = await sb.from('latest_fuel_reports').select('*').in('station_id', ids);
 
     const now = Date.now();
     allStations = sData.map(s => {
