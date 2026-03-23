@@ -343,23 +343,40 @@ async function doAuth(mode) {
 // === Load Data ===
 async function loadAll() {
     showLoading();
-    await loadBrandPrices();
-    const { data: dData } = await sb.from('districts').select('*').order('id');
-    districts = dData || [];
+
+    try {
+    // โหลดพร้อมกัน + timeout 10 วินาที
+    const timeout = (promise) => Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000))
+    ]);
+
+    const [brandRes, distRes, stRes] = await Promise.allSettled([
+        timeout(loadBrandPrices()),
+        timeout(sb.from('districts').select('*').order('id')),
+        timeout(sb.from('stations').select('id,name,brand,district_id,subdistrict,pumps,lat,lng,osm_id,is_open,note').order('name')),
+    ]);
+
+    districts = distRes.status === 'fulfilled' ? (distRes.value.data || []) : [];
     document.getElementById('filter-district').innerHTML = '<option value="">ทุกอำเภอ</option>' +
         districts.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
 
-    const { data: sData } = await sb.from('stations').select('*').order('name');
+    const sData = stRes.status === 'fulfilled' ? stRes.value.data : null;
     if (!sData || !sData.length) { document.getElementById('station-list').innerHTML = '<p style="text-align:center;padding:40px;color:#94a3b8;">ยังไม่มีข้อมูลปั๊ม</p>'; return; }
 
-    const ids = sData.map(s => s.id);
-    // ดึงแค่ report 7 วันล่าสุด + จำกัด 1000 rows
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: reports } = await sb.from('fuel_reports').select('*')
-        .in('station_id', ids)
-        .gte('created_at', weekAgo)
-        .order('created_at', { ascending: false })
-        .limit(1000);
+    // ดึง report ล่าสุด — ใช้ view ถ้าได้ ไม่ได้ก็ fallback
+    let reports = [];
+    try {
+        const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const { data } = await timeout(
+            sb.from('fuel_reports')
+                .select('station_id,fuel_type,status,price,queue_cars,note,created_at')
+                .gte('created_at', weekAgo)
+                .order('created_at', { ascending: false })
+                .limit(500)
+        );
+        reports = data || [];
+    } catch { reports = []; }
 
     const now = Date.now();
     allStations = sData.map(s => {
@@ -387,6 +404,12 @@ async function loadAll() {
     updateSubdistrictFilter();
     applyFilters();
     updatePriceByBrand();
+
+    } catch (err) {
+        document.getElementById('station-list').innerHTML =
+            '<p style="text-align:center;padding:40px;color:#dc2626;">โหลดข้อมูลไม่สำเร็จ กดรีเฟรชเพื่อลองอีกครั้ง</p>';
+        console.error('loadAll error:', err);
+    }
 }
 
 // === ราคาน้ำมันตามแบรนด์ (กรอกเอง) ===
