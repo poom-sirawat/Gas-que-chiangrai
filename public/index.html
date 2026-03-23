@@ -300,9 +300,17 @@ async function setUser(user) {
     const fab = document.getElementById('fab-menu');
 
     if (user) {
-        // ดึง role จาก DB
-        const { data } = await sb.from('user_roles').select('role').eq('user_id', user.id).single();
-        currentRole = data?.role || 'staff';
+        // ดึง role จาก cache ก่อน ถ้าไม่มีค่อย query DB
+        const cachedRole = localStorage.getItem('user_role_' + user.id);
+        if (cachedRole) {
+            currentRole = cachedRole;
+        } else {
+            try {
+                const { data } = await sb.from('user_roles').select('role').eq('user_id', user.id).single();
+                currentRole = data?.role || 'staff';
+                localStorage.setItem('user_role_' + user.id, currentRole);
+            } catch { currentRole = 'staff'; }
+        }
 
         const roleLabel = currentRole === 'admin' ? '(แอดมิน)' : '(พนักงาน)';
         el.innerHTML = `<span class="user-name">${user.email.split('@')[0]} ${roleLabel}</span>
@@ -345,7 +353,13 @@ async function loadAll() {
     if (!sData || !sData.length) { document.getElementById('station-list').innerHTML = '<p style="text-align:center;padding:40px;color:#94a3b8;">ยังไม่มีข้อมูลปั๊ม</p>'; return; }
 
     const ids = sData.map(s => s.id);
-    const { data: reports } = await sb.from('latest_fuel_reports').select('*').in('station_id', ids);
+    // ดึงแค่ report 7 วันล่าสุด + จำกัด 1000 rows
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: reports } = await sb.from('fuel_reports').select('*')
+        .in('station_id', ids)
+        .gte('created_at', weekAgo)
+        .order('created_at', { ascending: false })
+        .limit(1000);
 
     const now = Date.now();
     allStations = sData.map(s => {
