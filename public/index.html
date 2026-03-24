@@ -341,11 +341,15 @@ async function doAuth(mode) {
 }
 
 // === Load Data ===
-async function loadAll() {
+let lastLoadTime = 0;
+const CACHE_MS = 60000; // cache 1 นาที ไม่ query ซ้ำ
+
+async function loadAll(force) {
+    // ถ้าเพิ่งโหลดไม่เกิน 1 นาที ข้าม (ยกเว้น force)
+    if (!force && Date.now() - lastLoadTime < CACHE_MS) return;
     showLoading();
 
     try {
-    // โหลดทีละอัน ลด load บน DB
     await loadBrandPrices().catch(() => {});
 
     const { data: dData } = await sb.from('districts').select('*').order('id');
@@ -391,6 +395,7 @@ async function loadAll() {
     updateSubdistrictFilter();
     applyFilters();
     updatePriceByBrand();
+    lastLoadTime = Date.now();
 
     } catch (err) {
         document.getElementById('station-list').innerHTML =
@@ -698,7 +703,7 @@ async function submitReport() {
         }));
         const { error } = await sb.from('fuel_reports').upsert(rows, { onConflict: 'station_id,fuel_type' });
         if (error) throw error;
-        closeModal('report-modal'); toast(`✅ รายงานสำเร็จ!`); await loadAll();
+        closeModal('report-modal'); toast(`✅ รายงานสำเร็จ!`); await loadAll(true);
     } catch (err) { toast('❌ ' + err.message); }
     btn.disabled = false;
 }
@@ -755,7 +760,7 @@ async function submitAddStation() {
     try {
         const { error } = await sb.from('stations').insert({ name, brand, district_id: districtId, subdistrict: subdistrict || null, pumps: +document.getElementById('add-pumps').value || 4, lat, lng, osm_id: 'real/' + brand.toLowerCase() + '-' + Date.now(), is_open: true });
         if (error) throw error;
-        closeModal('add-station-modal'); toast('✅ เพิ่มปั๊ม "' + name + '" สำเร็จ!'); await loadAll();
+        closeModal('add-station-modal'); toast('✅ เพิ่มปั๊ม "' + name + '" สำเร็จ!'); await loadAll(true);
     } catch (err) { toast('❌ ' + err.message); }
     btn.disabled = false;
 }
@@ -767,7 +772,7 @@ async function deleteStation(id, name) {
         await sb.from('fuel_reports').delete().eq('station_id', id);
         await sb.from('stations').delete().eq('id', id);
         toast('✅ ลบปั๊ม "' + name + '" แล้ว');
-        await loadAll();
+        await loadAll(true);
     } catch (err) { toast('❌ ' + err.message); }
 }
 
@@ -830,7 +835,7 @@ async function cleanupDuplicates() {
         const res = await fetch('/api/cleanup-duplicates', { method: 'DELETE' });
         const data = await res.json();
         toast(data.removed > 0 ? `✅ ${data.message}` : '✅ ไม่มีข้อมูลซ้ำ');
-        if (data.removed > 0) await loadAll();
+        if (data.removed > 0) await loadAll(true);
     } catch (err) { toast('❌ ' + err.message); }
 }
 
@@ -857,7 +862,7 @@ async function uploadFile(input) {
 
         if (data.success) {
             toast('✅ ' + data.message);
-            await loadAll();
+            await loadAll(true);
         } else {
             toast('⚠️ ' + (data.message || data.error));
         }
