@@ -365,7 +365,7 @@ async function loadAll(force) {
     try {
         const { data } = await sb.from('fuel_reports')
             .select('station_id,fuel_type,status,price,queue_cars,note,created_at')
-            .limit(500);
+            .limit(2000);
         reports = data || [];
     } catch { reports = []; }
 
